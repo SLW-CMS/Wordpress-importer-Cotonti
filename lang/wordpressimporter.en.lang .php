@@ -29,6 +29,12 @@ $L['wordpressimporter_content'] = 'Content';
 $L['wordpressimporter_status'] = 'Status';
 $L['wordpressimporter_actions'] = 'Actions';
 
+// Database settings
+$L['wordpressimporter_database_prefix'] = 'Database Table Prefix';
+$L['wordpressimporter_database_prefix_hint'] = 'Enter your Cotonti database table prefix (usually "cot_" - leave empty to use default)';
+$L['wordpressimporter_db_error'] = 'Database access error';
+$L['wordpressimporter_db_success'] = 'Database connection successful';
+
 // Content types
 $L['wordpressimporter_posts'] = 'Posts';
 $L['wordpressimporter_pages'] = 'Pages';
@@ -58,6 +64,8 @@ $L['wordpressimporter_overall_progress'] = 'Overall Progress';
 $L['wordpressimporter_import_complete'] = 'Import completed successfully!';
 $L['wordpressimporter_import_failed'] = 'Import process failed. Please check the error message.';
 $L['wordpressimporter_back_to_list'] = 'Back to Import List';
+$L['wordpressimporter_page_refresh'] = 'The page will automatically refresh to continue processing';
+$L['wordpressimporter_log_check'] = 'Check the import_errors.log file in your upload directory for detailed error information';
 
 // Selection screen
 $L['wordpressimporter_select_items'] = 'Select Items to Import';
@@ -76,6 +84,10 @@ $L['wordpressimporter_uploaded_success'] = 'WordPress XML file uploaded and anal
 $L['wordpressimporter_delete_success'] = 'Import record deleted successfully.';
 $L['wordpressimporter_delete_error'] = 'Error deleting import record.';
 $L['wordpressimporter_db_error'] = 'Database error occurred while creating import record.';
+$L['wordpressimporter_import_started'] = 'Import process started with selected items.';
+$L['wordpressimporter_import_all_started'] = 'Import process started with all items.';
+$L['wordpressimporter_delete_all_success'] = 'All import data has been deleted successfully.';
+$L['wordpressimporter_delete_selected_success'] = 'Selected import data has been deleted successfully.';
 
 // Error messages
 $L['wordpressimporter_error_upload'] = 'Error uploading file. Please try again.';
@@ -84,6 +96,7 @@ $L['wordpressimporter_error_move_uploaded'] = 'Error moving uploaded file. Pleas
 $L['wordpressimporter_error_file_not_found'] = 'XML file not found. Please re-upload.';
 $L['wordpressimporter_error_xml_parse'] = 'Error parsing XML file. The file may be corrupted or not a valid WordPress export file.';
 $L['wordpressimporter_error_not_wordpress_export'] = 'The uploaded file is not a valid WordPress export file.';
+$L['wordpressimporter_error_create_upload_dir'] = 'Could not create upload directory. Please check permissions.';
 
 // Instructions
 $L['wordpressimporter_instructions_title'] = 'How to use this importer';
@@ -95,7 +108,7 @@ $L['wordpressimporter_instruction_5'] = 'After analysis, select which items to i
 
 // Configuration
 $L['cfg_upload_path'] = 'Upload path for WordPress XML files';
-$L['cfg_upload_path_hint'] = 'Path to store temporarily uploaded WordPress XML files';
+$L['cfg_upload_path_hint'] = 'Path to store temporarily uploaded WordPress XML files (Make sure this directory is writable)';
 $L['cfg_import_attachments'] = 'Import media attachments';
 $L['cfg_import_attachments_hint'] = 'Allow importing media attachments from WordPress';
 $L['cfg_max_execution_time'] = 'Maximum execution time';
@@ -110,8 +123,4 @@ $L['wordpressimporter_import_all'] = 'Import All';
 $L['wordpressimporter_delete_all'] = 'Delete All';
 $L['wordpressimporter_import_selected'] = 'Import Selected';
 $L['wordpressimporter_delete_selected'] = 'Delete Selected';
-$L['wordpressimporter_select_and_import'] = 'Select & Import';
-$L['wordpressimporter_import_started'] = 'Import process started with selected items.';
-$L['wordpressimporter_import_all_started'] = 'Import process started with all items.';
-$L['wordpressimporter_delete_all_success'] = 'All import data has been deleted successfully.';
-$L['wordpressimporter_delete_selected_success'] = 'Selected import data has been deleted successfully.';
+$L['wordpressimporter_more_options'] = 'More Options';
