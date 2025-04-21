@@ -15,6 +15,56 @@ defined('COT_CODE') or die('Wrong URL');
 $db_wordpressimporter_imports = (isset($db_wordpressimporter_imports)) ? $db_wordpressimporter_imports : $db_x . 'wordpressimporter_imports';
 
 /**
+ * Log error message to file
+ * 
+ * @param string $error Error message
+ * @return void
+ */
+function wpi_log_error($error)
+{
+    global $cfg;
+    
+    $log_path = $cfg['plugin']['wordpressimporter']['upload_path'] . 'import_errors.log';
+    $timestamp = date('Y-m-d H:i:s');
+    $message = "[$timestamp] $error\n";
+    
+    @file_put_contents($log_path, $message, FILE_APPEND);
+}
+
+/**
+ * Check database connection and permissions
+ * 
+ * @return array Status information
+ */
+function wpi_check_db_access()
+{
+    global $db, $db_x;
+    
+    $result = array(
+        'success' => false,
+        'message' => '',
+        'error' => ''
+    );
+    
+    try {
+        // Try to run a simple query
+        $db->query("SELECT 1");
+        
+        // Check if we can write to structure table
+        $can_write = $db->query("SHOW GRANTS FOR CURRENT_USER()")->fetchAll();
+        $result['success'] = true;
+        $result['message'] = 'Database access is successful.';
+        $result['table_prefix'] = $db_x;
+        
+    } catch (Exception $e) {
+        $result['error'] = 'Database error: ' . $e->getMessage();
+        wpi_log_error($result['error']);
+    }
+    
+    return $result;
+}
+
+/**
  * Create necessary database tables
  */
 function wpi_create_tables()
@@ -22,26 +72,35 @@ function wpi_create_tables()
     global $db, $db_wordpressimporter_imports;
     
     if (!$db->tableExists($db_wordpressimporter_imports)) {
-        $db->query("CREATE TABLE IF NOT EXISTS `$db_wordpressimporter_imports` (
-            `imp_id` int(11) NOT NULL auto_increment,
-            `imp_file` varchar(255) NOT NULL,
-            `imp_title` varchar(255) NOT NULL,
-            `imp_date` int(11) NOT NULL,
-            `imp_posts_count` int(11) NOT NULL default '0',
-            `imp_pages_count` int(11) NOT NULL default '0',
-            `imp_categories_count` int(11) NOT NULL default '0',
-            `imp_tags_count` int(11) NOT NULL default '0',
-            `imp_attachments_count` int(11) NOT NULL default '0',
-            `imp_processed_posts` int(11) NOT NULL default '0',
-            `imp_processed_pages` int(11) NOT NULL default '0',
-            `imp_processed_categories` int(11) NOT NULL default '0',
-            `imp_processed_tags` int(11) NOT NULL default '0',
-            `imp_processed_attachments` int(11) NOT NULL default '0',
-            `imp_status` varchar(20) NOT NULL default 'new',
-            `imp_selection` text,
-            PRIMARY KEY  (`imp_id`)
-        ) ENGINE=MyISAM DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;");
+        try {
+            $db->query("CREATE TABLE IF NOT EXISTS `$db_wordpressimporter_imports` (
+                `imp_id` int(11) NOT NULL auto_increment,
+                `imp_file` varchar(255) NOT NULL,
+                `imp_title` varchar(255) NOT NULL,
+                `imp_date` int(11) NOT NULL,
+                `imp_posts_count` int(11) NOT NULL default '0',
+                `imp_pages_count` int(11) NOT NULL default '0',
+                `imp_categories_count` int(11) NOT NULL default '0',
+                `imp_tags_count` int(11) NOT NULL default '0',
+                `imp_attachments_count` int(11) NOT NULL default '0',
+                `imp_processed_posts` int(11) NOT NULL default '0',
+                `imp_processed_pages` int(11) NOT NULL default '0',
+                `imp_processed_categories` int(11) NOT NULL default '0',
+                `imp_processed_tags` int(11) NOT NULL default '0',
+                `imp_processed_attachments` int(11) NOT NULL default '0',
+                `imp_status` varchar(20) NOT NULL default 'new',
+                `imp_selection` text,
+                PRIMARY KEY  (`imp_id`)
+            ) ENGINE=MyISAM DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;");
+            
+            return true;
+        } catch (Exception $e) {
+            wpi_log_error("Error creating import table: " . $e->getMessage());
+            return false;
+        }
     }
+    
+    return true;
 }
 
 /**
@@ -88,7 +147,11 @@ function wpi_upload_file($input_name)
     // Create directory if it doesn't exist
     $upload_path = $cfg['plugin']['wordpressimporter']['upload_path'];
     if (!file_exists($upload_path)) {
-        mkdir($upload_path, 0755, true);
+        if (!mkdir($upload_path, 0755, true)) {
+            $result['error'] = 'error_create_upload_dir';
+            wpi_log_error("Failed to create upload directory: $upload_path");
+            return $result;
+        }
     }
     
     // Generate unique filename
@@ -101,6 +164,7 @@ function wpi_upload_file($input_name)
         $result['filename'] = $filename;
     } else {
         $result['error'] = 'error_move_uploaded';
+        wpi_log_error("Failed to move uploaded file to: $filepath");
     }
     
     return $result;
@@ -126,6 +190,7 @@ function wpi_parse_wordpress_xml($filename)
     
     if (!file_exists($filepath)) {
         $result['error'] = 'error_file_not_found';
+        wpi_log_error("XML file not found: $filepath");
         return $result;
     }
     
@@ -137,6 +202,11 @@ function wpi_parse_wordpress_xml($filename)
         if ($xml === false) {
             $errors = libxml_get_errors();
             libxml_clear_errors();
+            $error_msg = "XML Parse Errors: ";
+            foreach ($errors as $error) {
+                $error_msg .= "Line: {$error->line}, Col: {$error->column}, Message: {$error->message}\n";
+            }
+            wpi_log_error($error_msg);
             $result['error'] = 'error_xml_parse';
             return $result;
         }
@@ -204,6 +274,7 @@ function wpi_parse_wordpress_xml($filename)
         
     } catch (Exception $e) {
         $result['error'] = 'error_exception: ' . $e->getMessage();
+        wpi_log_error("Exception parsing XML: " . $e->getMessage());
     }
     
     return $result;
@@ -219,26 +290,31 @@ function wpi_create_import($info)
 {
     global $db, $db_wordpressimporter_imports, $sys;
     
-    $import = array(
-        'imp_file' => $info['file'],
-        'imp_title' => $info['title'],
-        'imp_date' => $sys['now'],
-        'imp_posts_count' => $info['posts_count'],
-        'imp_pages_count' => $info['pages_count'],
-        'imp_categories_count' => $info['categories_count'],
-        'imp_tags_count' => $info['tags_count'],
-        'imp_attachments_count' => $info['attachments_count'],
-        'imp_processed_posts' => 0,
-        'imp_processed_pages' => 0,
-        'imp_processed_categories' => 0,
-        'imp_processed_tags' => 0,
-        'imp_processed_attachments' => 0,
-        'imp_status' => 'new',
-        'imp_selection' => null
-    );
-    
-    $db->insert($db_wordpressimporter_imports, $import);
-    return $db->lastInsertId();
+    try {
+        $import = array(
+            'imp_file' => $info['file'],
+            'imp_title' => $info['title'],
+            'imp_date' => $sys['now'],
+            'imp_posts_count' => $info['posts_count'],
+            'imp_pages_count' => $info['pages_count'],
+            'imp_categories_count' => $info['categories_count'],
+            'imp_tags_count' => $info['tags_count'],
+            'imp_attachments_count' => $info['attachments_count'],
+            'imp_processed_posts' => 0,
+            'imp_processed_pages' => 0,
+            'imp_processed_categories' => 0,
+            'imp_processed_tags' => 0,
+            'imp_processed_attachments' => 0,
+            'imp_status' => 'new',
+            'imp_selection' => null
+        );
+        
+        $db->insert($db_wordpressimporter_imports, $import);
+        return $db->lastInsertId();
+    } catch (Exception $e) {
+        wpi_log_error("Error creating import record: " . $e->getMessage());
+        return 0;
+    }
 }
 
 /**
@@ -251,7 +327,12 @@ function wpi_get_import($import_id)
 {
     global $db, $db_wordpressimporter_imports;
     
-    return $db->query("SELECT * FROM $db_wordpressimporter_imports WHERE imp_id = ?", $import_id)->fetch();
+    try {
+        return $db->query("SELECT * FROM $db_wordpressimporter_imports WHERE imp_id = ?", $import_id)->fetch();
+    } catch (Exception $e) {
+        wpi_log_error("Error getting import record: " . $e->getMessage());
+        return false;
+    }
 }
 
 /**
@@ -270,14 +351,19 @@ function wpi_delete_import($import_id)
         return false;
     }
     
-    // Delete file
-    $filepath = $cfg['plugin']['wordpressimporter']['upload_path'] . $import['imp_file'];
-    if (file_exists($filepath)) {
-        @unlink($filepath);
+    try {
+        // Delete file
+        $filepath = $cfg['plugin']['wordpressimporter']['upload_path'] . $import['imp_file'];
+        if (file_exists($filepath)) {
+            @unlink($filepath);
+        }
+        
+        // Delete import record
+        return $db->delete($db_wordpressimporter_imports, "imp_id = ?", $import_id) > 0;
+    } catch (Exception $e) {
+        wpi_log_error("Error deleting import: " . $e->getMessage());
+        return false;
     }
-    
-    // Delete import record
-    return $db->delete($db_wordpressimporter_imports, "imp_id = ?", $import_id) > 0;
 }
 
 /**
@@ -293,35 +379,40 @@ function wpi_update_import_status($import_id, $status, $processed = array(), $se
 {
     global $db, $db_wordpressimporter_imports;
     
-    $update = array('imp_status' => $status);
-    
-    // Update processed items counts if provided
-    if (isset($processed['posts'])) {
-        $update['imp_processed_posts'] = (int)$processed['posts'];
+    try {
+        $update = array('imp_status' => $status);
+        
+        // Update processed items counts if provided
+        if (isset($processed['posts'])) {
+            $update['imp_processed_posts'] = (int)$processed['posts'];
+        }
+        
+        if (isset($processed['pages'])) {
+            $update['imp_processed_pages'] = (int)$processed['pages'];
+        }
+        
+        if (isset($processed['categories'])) {
+            $update['imp_processed_categories'] = (int)$processed['categories'];
+        }
+        
+        if (isset($processed['tags'])) {
+            $update['imp_processed_tags'] = (int)$processed['tags'];
+        }
+        
+        if (isset($processed['attachments'])) {
+            $update['imp_processed_attachments'] = (int)$processed['attachments'];
+        }
+        
+        // Add selection JSON if provided
+        if ($selection_json !== null) {
+            $update['imp_selection'] = $selection_json;
+        }
+        
+        return $db->update($db_wordpressimporter_imports, $update, "imp_id = ?", $import_id) > 0;
+    } catch (Exception $e) {
+        wpi_log_error("Error updating import status: " . $e->getMessage());
+        return false;
     }
-    
-    if (isset($processed['pages'])) {
-        $update['imp_processed_pages'] = (int)$processed['pages'];
-    }
-    
-    if (isset($processed['categories'])) {
-        $update['imp_processed_categories'] = (int)$processed['categories'];
-    }
-    
-    if (isset($processed['tags'])) {
-        $update['imp_processed_tags'] = (int)$processed['tags'];
-    }
-    
-    if (isset($processed['attachments'])) {
-        $update['imp_processed_attachments'] = (int)$processed['attachments'];
-    }
-    
-    // Add selection JSON if provided
-    if ($selection_json !== null) {
-        $update['imp_selection'] = $selection_json;
-    }
-    
-    return $db->update($db_wordpressimporter_imports, $update, "imp_id = ?", $import_id) > 0;
 }
 
 /**
@@ -347,6 +438,13 @@ function wpi_import_categories($xml_path, $offset = 0, $limit = 5)
     try {
         // Load XML file
         $xml = simplexml_load_file($xml_path);
+        if ($xml === false) {
+            $result['success'] = false;
+            $result['error'] = 'Error loading XML file';
+            wpi_log_error("Error loading XML file: $xml_path");
+            return $result;
+        }
+        
         $namespaces = $xml->getNamespaces(true);
         $wp = $xml->channel->children($namespaces['wp'] ?? 'http://wordpress.org/export/1.2/');
         
@@ -383,8 +481,8 @@ function wpi_import_categories($xml_path, $offset = 0, $limit = 5)
             
             // Check if category already exists
             $exists = $db->query("SELECT COUNT(*) FROM $db_structure 
-                                 WHERE structure_code = ? AND structure_area = 'page'", 
-                                 array($cat_code))->fetchColumn();
+                               WHERE structure_code = ? AND structure_area = 'page'", 
+                               array($cat_code))->fetchColumn();
             
             if (!$exists) {
                 // Create category
@@ -392,7 +490,7 @@ function wpi_import_categories($xml_path, $offset = 0, $limit = 5)
                     'structure_area' => 'page',
                     'structure_code' => $cat_code,
                     'structure_path' => '',  // Will be updated in second pass
-                    'structure_tpath' => '',  // Will be updated in second pass
+                    'structure_tpl' => '',
                     'structure_title' => $category['name'],
                     'structure_desc' => '',
                     'structure_icon' => '',
@@ -420,27 +518,23 @@ function wpi_import_categories($xml_path, $offset = 0, $limit = 5)
                 
                 // Get parent path
                 $parent_path = $db->query("SELECT structure_path FROM $db_structure 
-                                          WHERE structure_code = ? AND structure_area = 'page'", 
-                                          array($parent_code))->fetchColumn();
+                                        WHERE structure_code = ? AND structure_area = 'page'", 
+                                        array($parent_code))->fetchColumn();
                 
                 if ($parent_path) {
                     // Update current category path
                     $new_path = empty($parent_path) ? $cat_code : $parent_path . '.' . $cat_code;
-                    $new_tpath = $db->query("SELECT structure_tpath FROM $db_structure 
-                                            WHERE structure_code = ? AND structure_area = 'page'", 
-                                            array($parent_code))->fetchColumn();
-                    $new_tpath .= ' - ' . $category['name'];
                     
                     $db->update($db_structure, 
-                                array('structure_path' => $new_path, 'structure_tpath' => $new_tpath), 
-                                "structure_code = ? AND structure_area = 'page'", 
-                                array($cat_code));
+                              array('structure_path' => $new_path), 
+                              "structure_code = ? AND structure_area = 'page'", 
+                              array($cat_code));
                 }
             } else {
                 // No parent, so set the path to just the code
                 $cat_code = $parent_map[$category['nicename']];
                 $db->update($db_structure, 
-                          array('structure_path' => $cat_code, 'structure_tpath' => $category['name']), 
+                          array('structure_path' => $cat_code), 
                           "structure_code = ? AND structure_area = 'page'", 
                           array($cat_code));
             }
@@ -451,6 +545,7 @@ function wpi_import_categories($xml_path, $offset = 0, $limit = 5)
     } catch (Exception $e) {
         $result['success'] = false;
         $result['error'] = 'Error importing categories: ' . $e->getMessage();
+        wpi_log_error("Error importing categories: " . $e->getMessage());
     }
     
     return $result;
@@ -479,6 +574,13 @@ function wpi_import_tags($xml_path, $offset = 0, $limit = 10)
     try {
         // Load XML file
         $xml = simplexml_load_file($xml_path);
+        if ($xml === false) {
+            $result['success'] = false;
+            $result['error'] = 'Error loading XML file';
+            wpi_log_error("Error loading XML file: $xml_path");
+            return $result;
+        }
+        
         $namespaces = $xml->getNamespaces(true);
         $wp = $xml->channel->children($namespaces['wp'] ?? 'http://wordpress.org/export/1.2/');
         
@@ -502,21 +604,54 @@ function wpi_import_tags($xml_path, $offset = 0, $limit = 10)
         foreach ($tags as $tag) {
             $tag_name = cot_tag_prep($tag['name']);
             
-            // Check if tag already exists
-            $exists = $db->query("SELECT COUNT(*) FROM $db_tag WHERE tag_name = ?", 
-                                array($tag_name))->fetchColumn();
-            
-            if (!$exists) {
-                // Create tag
-                $tag_data = array(
-                    'tag_name' => $tag_name,
-                    'tag_count' => 0
-                );
-                
-                $db->insert($db_tag, $tag_data);
+            if (empty($tag_name)) {
+                continue;
             }
             
-            $result['processed']++;
+            try {
+                // Cotonti tags tablosunun yapısını kontrol et - bazı versiyonlarda farklı olabilir
+                // İlk olarak 'tag' sütunu olabilir
+                try {
+                    // Kontrol et - tag alanı varsa
+                    $sql = "SHOW COLUMNS FROM $db_tag LIKE 'tag'";
+                    $hasTagColumn = $db->query($sql)->rowCount() > 0;
+                    
+                    if ($hasTagColumn) {
+                        // Check if tag already exists
+                        $sql = "SELECT COUNT(*) FROM $db_tag WHERE tag = ?";
+                        $exists = $db->query($sql, array($tag_name))->fetchColumn();
+                        
+                        if (!$exists) {
+                            // Create tag
+                            $sql = "INSERT INTO $db_tag (tag) VALUES (?)";
+                            $db->query($sql, array($tag_name));
+                        }
+                    } else {
+                        // tag_name alanını kontrol et
+                        $sql = "SELECT COUNT(*) FROM $db_tag WHERE tag_name = ?";
+                        $exists = $db->query($sql, array($tag_name))->fetchColumn();
+                        
+                        if (!$exists) {
+                            // Create tag
+                            $sql = "INSERT INTO $db_tag (tag_name, tag_count) VALUES (?, ?)";
+                            $db->query($sql, array($tag_name, 0));
+                        }
+                    }
+                    
+                    $result['processed']++;
+                } catch (Exception $columnEx) {
+                    wpi_log_error("Tag table column check error: " . $columnEx->getMessage());
+                    
+                    // Alternatif yöntem - doğrudan deneme yap, tag_name kullan
+                    $sql = "INSERT INTO $db_tag (tag_name, tag_count) VALUES (?, ?)";
+                    $db->query($sql, array($tag_name, 0));
+                    $result['processed']++;
+                }
+            } catch (Exception $tagEx) {
+                wpi_log_error("Single tag import error for '$tag_name': " . $tagEx->getMessage());
+                // Tek bir etiketi eklerken hata olduğunda, tüm import durmasın, sadece log at ve devam et
+                continue;
+            }
         }
         
         $result['message'] = $result['processed'] . ' tags imported successfully.';
@@ -524,6 +659,7 @@ function wpi_import_tags($xml_path, $offset = 0, $limit = 10)
     } catch (Exception $e) {
         $result['success'] = false;
         $result['error'] = 'Error importing tags: ' . $e->getMessage();
+        wpi_log_error("Error importing tags: " . $e->getMessage());
     }
     
     return $result;
@@ -539,7 +675,7 @@ function wpi_import_tags($xml_path, $offset = 0, $limit = 10)
  */
 function wpi_import_posts($xml_path, $offset = 0, $limit = 5)
 {
-    global $db, $db_pages, $db_structure, $db_tag, $db_tag_references, $cfg, $usr;
+    global $db, $db_pages, $db_structure, $db_tag, $db_tag_references, $cfg, $usr, $L;
     
     $result = array(
         'success' => true,
@@ -552,6 +688,13 @@ function wpi_import_posts($xml_path, $offset = 0, $limit = 5)
     try {
         // Load XML file
         $xml = simplexml_load_file($xml_path);
+        if ($xml === false) {
+            $result['success'] = false;
+            $result['error'] = 'Error loading XML file';
+            wpi_log_error("Error loading XML file: $xml_path");
+            return $result;
+        }
+        
         $namespaces = $xml->getNamespaces(true);
         $wp = $xml->channel->children($namespaces['wp'] ?? 'http://wordpress.org/export/1.2/');
         $content = $xml->channel->children($namespaces['content'] ?? 'http://purl.org/rss/1.0/modules/content/');
@@ -565,8 +708,9 @@ function wpi_import_posts($xml_path, $offset = 0, $limit = 5)
             foreach ($xml->channel->item as $item) {
                 $wp_item = $item->children($namespaces['wp'] ?? 'http://wordpress.org/export/1.2/');
                 $post_type = isset($wp_item->post_type) ? (string)$wp_item->post_type : '';
+                $status = isset($wp_item->status) ? (string)$wp_item->status : '';
                 
-                if ($post_type == 'post') {
+                if ($post_type == 'post' && ($status == 'publish' || $status == 'draft')) {
                     $total_posts++;
                     
                     // Skip if not in current batch
@@ -574,8 +718,15 @@ function wpi_import_posts($xml_path, $offset = 0, $limit = 5)
                         continue;
                     }
                     
-                    $content_encoded = isset($content->encoded) ? (string)$item->children($namespaces['content'] ?? 'http://purl.org/rss/1.0/modules/content/')->encoded : '';
-                    $excerpt_encoded = isset($excerpt->encoded) ? (string)$item->children($namespaces['excerpt'] ?? 'http://wordpress.org/export/1.2/excerpt/')->encoded : '';
+                    $content_encoded = '';
+                    if (isset($item->children($namespaces['content'])->encoded)) {
+                        $content_encoded = (string)$item->children($namespaces['content'])->encoded;
+                    }
+                    
+                    $excerpt_encoded = '';
+                    if (isset($item->children($namespaces['excerpt'])->encoded)) {
+                        $excerpt_encoded = (string)$item->children($namespaces['excerpt'])->encoded;
+                    }
                     
                     $post = array(
                         'title' => (string)$item->title,
@@ -587,23 +738,25 @@ function wpi_import_posts($xml_path, $offset = 0, $limit = 5)
                         'post_date' => (string)$wp_item->post_date,
                         'post_date_gmt' => (string)$wp_item->post_date_gmt,
                         'post_name' => (string)$wp_item->post_name,
-                        'status' => (string)$wp_item->status,
+                        'status' => $status,
                         'post_parent' => (string)$wp_item->post_parent,
                         'categories' => array(),
                         'tags' => array()
                     );
                     
                     // Get categories and tags
-                    foreach ($item->category as $category) {
-                        $domain = (string)$category['domain'];
-                        
-                        if ($domain == 'category') {
-                            $post['categories'][] = array(
-                                'nicename' => (string)$category['nicename'],
-                                'name' => (string)$category
-                            );
-                        } elseif ($domain == 'post_tag') {
-                            $post['tags'][] = (string)$category;
+                    if (isset($item->category)) {
+                        foreach ($item->category as $category) {
+                            $domain = (string)$category['domain'];
+                            
+                            if ($domain == 'category') {
+                                $post['categories'][] = array(
+                                    'nicename' => (string)$category['nicename'],
+                                    'name' => (string)$category
+                                );
+                            } elseif ($domain == 'post_tag') {
+                                $post['tags'][] = (string)$category;
+                            }
                         }
                     }
                     
@@ -634,8 +787,8 @@ function wpi_import_posts($xml_path, $offset = 0, $limit = 5)
                     
                     // Check if category exists in Cotonti
                     $exists = $db->query("SELECT COUNT(*) FROM $db_structure 
-                                         WHERE structure_code = ? AND structure_area = 'page'", 
-                                         array($cat_code_check))->fetchColumn();
+                                       WHERE structure_code = ? AND structure_area = 'page'", 
+                                       array($cat_code_check))->fetchColumn();
                     
                     if ($exists) {
                         $cat_code = $cat_code_check;
@@ -647,15 +800,15 @@ function wpi_import_posts($xml_path, $offset = 0, $limit = 5)
             // Create page data
             $page_data = array(
                 'page_title' => $post['title'],
-                'page_desc' => $post['excerpt'] ?: cot_string_truncate(strip_tags($post['content']), 200),
+                'page_desc' => $post['excerpt'] ? strip_tags($post['excerpt']) : cot_string_truncate(strip_tags($post['content']), 200),
                 'page_text' => $post['content'],
-                'page_author' => $usr['id'],
+                'page_author' => $usr['name'],
                 'page_ownerid' => $usr['id'],
                 'page_date' => $post_date,
                 'page_begin' => $post_date,
                 'page_expire' => 0,
                 'page_cat' => $cat_code,
-                'page_alias' => $post['post_name'] ?: cot_makealias($post['title']),
+                'page_alias' => $post['post_name'] ? $post['post_name'] : cot_makealias($post['title']),
                 'page_state' => ($post['status'] == 'publish') ? 0 : 1 // 0 = published, 1 = draft
             );
             
@@ -663,47 +816,54 @@ function wpi_import_posts($xml_path, $offset = 0, $limit = 5)
             $db->insert($db_pages, $page_data);
             $page_id = $db->lastInsertId();
             
-            // Update category count
-            $db->query("UPDATE $db_structure SET structure_count = structure_count + 1 
-                        WHERE structure_code = ? AND structure_area = 'page'", 
-                        array($cat_code));
-            
-            // Import tags
-            if (!empty($post['tags'])) {
-                foreach ($post['tags'] as $tag) {
-                    $tag_name = cot_tag_prep($tag);
-                    
-                    // Check if tag exists
-                    $tag_id = $db->query("SELECT tag_id FROM $db_tag WHERE tag_name = ?", 
-                                         array($tag_name))->fetchColumn();
-                    
-                    if (!$tag_id) {
-                        // Create tag
-                        $tag_data = array(
-                            'tag_name' => $tag_name,
-                            'tag_count' => 1
+            if ($page_id) {
+                // Update category count
+                $db->query("UPDATE $db_structure SET structure_count = structure_count + 1 
+                          WHERE structure_code = ? AND structure_area = 'page'", 
+                          array($cat_code));
+                
+                // Import tags
+                if (!empty($post['tags'])) {
+                    foreach ($post['tags'] as $tag) {
+                        $tag_name = cot_tag_prep($tag);
+                        
+                        if (empty($tag_name)) {
+                            continue;
+                        }
+                        
+                        // Check if tag exists
+                        $tag_id = $db->query("SELECT tag_id FROM $db_tag WHERE tag_name = ?", 
+                                           array($tag_name))->fetchColumn();
+                        
+                        if (!$tag_id) {
+                            // Create tag
+                            $tag_data = array(
+                                'tag_name' => $tag_name,
+                                'tag_count' => 1
+                            );
+                            
+                            $db->insert($db_tag, $tag_data);
+                            $tag_id = $db->lastInsertId();
+                        } else {
+                            // Update tag count
+                            $db->query("UPDATE $db_tag SET tag_count = tag_count + 1 
+                                      WHERE tag_id = ?", array($tag_id));
+                        }
+                        
+                        // Create tag reference
+                        $tag_ref_data = array(
+                            'tag' => $tag_name,
+                            'tag_item' => $page_id,
+                            'tag_area' => 'pages',
+                            'tag_locale' => ''
                         );
                         
-                        $db->insert($db_tag, $tag_data);
-                        $tag_id = $db->lastInsertId();
-                    } else {
-                        // Update tag count
-                        $db->query("UPDATE $db_tag SET tag_count = tag_count + 1 
-                                    WHERE tag_id = ?", array($tag_id));
+                        $db->insert($db_tag_references, $tag_ref_data);
                     }
-                    
-                    // Create tag reference
-                    $tag_ref_data = array(
-                        'tag_id' => $tag_id,
-                        'tag_area' => 'pages',
-                        'tag_item' => $page_id
-                    );
-                    
-                    $db->insert($db_tag_references, $tag_ref_data);
                 }
+                
+                $result['processed']++;
             }
-            
-            $result['processed']++;
         }
         
         $result['message'] = $result['processed'] . ' posts imported successfully.';
@@ -711,6 +871,7 @@ function wpi_import_posts($xml_path, $offset = 0, $limit = 5)
     } catch (Exception $e) {
         $result['success'] = false;
         $result['error'] = 'Error importing posts: ' . $e->getMessage();
+        wpi_log_error("Error importing posts: " . $e->getMessage());
     }
     
     return $result;
@@ -739,6 +900,13 @@ function wpi_import_pages($xml_path, $offset = 0, $limit = 5)
     try {
         // Load XML file
         $xml = simplexml_load_file($xml_path);
+        if ($xml === false) {
+            $result['success'] = false;
+            $result['error'] = 'Error loading XML file';
+            wpi_log_error("Error loading XML file: $xml_path");
+            return $result;
+        }
+        
         $namespaces = $xml->getNamespaces(true);
         $wp = $xml->channel->children($namespaces['wp'] ?? 'http://wordpress.org/export/1.2/');
         $content = $xml->channel->children($namespaces['content'] ?? 'http://purl.org/rss/1.0/modules/content/');
@@ -752,8 +920,9 @@ function wpi_import_pages($xml_path, $offset = 0, $limit = 5)
             foreach ($xml->channel->item as $item) {
                 $wp_item = $item->children($namespaces['wp'] ?? 'http://wordpress.org/export/1.2/');
                 $post_type = isset($wp_item->post_type) ? (string)$wp_item->post_type : '';
+                $status = isset($wp_item->status) ? (string)$wp_item->status : '';
                 
-                if ($post_type == 'page') {
+                if ($post_type == 'page' && ($status == 'publish' || $status == 'draft')) {
                     $total_pages++;
                     
                     // Skip if not in current batch
@@ -761,8 +930,15 @@ function wpi_import_pages($xml_path, $offset = 0, $limit = 5)
                         continue;
                     }
                     
-                    $content_encoded = isset($content->encoded) ? (string)$item->children($namespaces['content'] ?? 'http://purl.org/rss/1.0/modules/content/')->encoded : '';
-                    $excerpt_encoded = isset($excerpt->encoded) ? (string)$item->children($namespaces['excerpt'] ?? 'http://wordpress.org/export/1.2/excerpt/')->encoded : '';
+                    $content_encoded = '';
+                    if (isset($item->children($namespaces['content'])->encoded)) {
+                        $content_encoded = (string)$item->children($namespaces['content'])->encoded;
+                    }
+                    
+                    $excerpt_encoded = '';
+                    if (isset($item->children($namespaces['excerpt'])->encoded)) {
+                        $excerpt_encoded = (string)$item->children($namespaces['excerpt'])->encoded;
+                    }
                     
                     $page = array(
                         'title' => (string)$item->title,
@@ -774,7 +950,7 @@ function wpi_import_pages($xml_path, $offset = 0, $limit = 5)
                         'post_date' => (string)$wp_item->post_date,
                         'post_date_gmt' => (string)$wp_item->post_date_gmt,
                         'post_name' => (string)$wp_item->post_name,
-                        'status' => (string)$wp_item->status,
+                        'status' => $status,
                         'post_parent' => (string)$wp_item->post_parent,
                         'menu_order' => (string)$wp_item->menu_order
                     );
@@ -785,9 +961,6 @@ function wpi_import_pages($xml_path, $offset = 0, $limit = 5)
         }
         
         $result['total'] = $total_pages;
-        
-        // Create page parent mapping
-        $parent_map = array();
         
         // Process each page
         foreach ($pages as $page) {
@@ -800,15 +973,15 @@ function wpi_import_pages($xml_path, $offset = 0, $limit = 5)
             // Create page data
             $page_data = array(
                 'page_title' => $page['title'],
-                'page_desc' => $page['excerpt'] ?: cot_string_truncate(strip_tags($page['content']), 200),
+                'page_desc' => $page['excerpt'] ? strip_tags($page['excerpt']) : cot_string_truncate(strip_tags($page['content']), 200),
                 'page_text' => $page['content'],
-                'page_author' => $usr['id'],
+                'page_author' => $usr['name'],
                 'page_ownerid' => $usr['id'],
                 'page_date' => $page_date,
                 'page_begin' => $page_date,
                 'page_expire' => 0,
                 'page_cat' => 'system', // All WordPress pages go to system category in Cotonti
-                'page_alias' => $page['post_name'] ?: cot_makealias($page['title']),
+                'page_alias' => $page['post_name'] ? $page['post_name'] : cot_makealias($page['title']),
                 'page_state' => ($page['status'] == 'publish') ? 0 : 1 // 0 = published, 1 = draft
             );
             
@@ -816,17 +989,13 @@ function wpi_import_pages($xml_path, $offset = 0, $limit = 5)
             $db->insert($db_pages, $page_data);
             $page_id = $db->lastInsertId();
             
-            // Store parent mapping for later update
-            $parent_map[$page['post_id']] = array(
-                'page_id' => $page_id,
-                'parent_id' => $page['post_parent']
-            );
-            
-            // Update category count
-            $db->query("UPDATE $db_structure SET structure_count = structure_count + 1 
-                        WHERE structure_code = 'system' AND structure_area = 'page'");
-            
-            $result['processed']++;
+            if ($page_id) {
+                // Update category count
+                $db->query("UPDATE $db_structure SET structure_count = structure_count + 1 
+                          WHERE structure_code = 'system' AND structure_area = 'page'");
+                
+                $result['processed']++;
+            }
         }
         
         $result['message'] = $result['processed'] . ' pages imported successfully.';
@@ -834,6 +1003,7 @@ function wpi_import_pages($xml_path, $offset = 0, $limit = 5)
     } catch (Exception $e) {
         $result['success'] = false;
         $result['error'] = 'Error importing pages: ' . $e->getMessage();
+        wpi_log_error("Error importing pages: " . $e->getMessage());
     }
     
     return $result;
@@ -849,7 +1019,7 @@ function wpi_import_pages($xml_path, $offset = 0, $limit = 5)
  */
 function wpi_import_attachments($xml_path, $offset = 0, $limit = 3)
 {
-    global $db, $cfg;
+    global $db, $cfg, $usr;
     
     $result = array(
         'success' => true,
@@ -862,6 +1032,13 @@ function wpi_import_attachments($xml_path, $offset = 0, $limit = 3)
     try {
         // Load XML file
         $xml = simplexml_load_file($xml_path);
+        if ($xml === false) {
+            $result['success'] = false;
+            $result['error'] = 'Error loading XML file';
+            wpi_log_error("Error loading XML file: $xml_path");
+            return $result;
+        }
+        
         $namespaces = $xml->getNamespaces(true);
         $wp = $xml->channel->children($namespaces['wp'] ?? 'http://wordpress.org/export/1.2/');
         
@@ -902,25 +1079,52 @@ function wpi_import_attachments($xml_path, $offset = 0, $limit = 3)
         
         $result['total'] = $total_attachments;
         
-        // Create upload directory if it doesn't exist
-        $upload_dir = $cfg['pfs_dir'];
-        if (!file_exists($upload_dir)) {
-            mkdir($upload_dir, 0755, true);
+        // Check if PFS module is installed and enabled
+        $pfs_dir = $cfg['pfs_dir'] ?? null;
+        
+        if (empty($pfs_dir)) {
+            // Fallback to custom upload directory
+            $pfs_dir = $cfg['plugin']['wordpressimporter']['upload_path'] . 'files/';
+            if (!file_exists($pfs_dir)) {
+                mkdir($pfs_dir, 0755, true);
+            }
         }
         
         // Process each attachment
         foreach ($attachments as $attachment) {
             // Generate unique filename
             $file_info = pathinfo($attachment['url']);
-            $filename = wpi_unique_filename($upload_dir, $file_info['basename']);
+            $filename = wpi_unique_filename($pfs_dir, $file_info['basename']);
             
             // Download file
             $file_content = @file_get_contents($attachment['url']);
             
             if ($file_content !== false) {
                 // Save file
-                file_put_contents($upload_dir . $filename, $file_content);
-                $result['processed']++;
+                if (file_put_contents($pfs_dir . $filename, $file_content)) {
+                    $result['processed']++;
+                    
+                    // If PFS module is active, create a PFS entry
+                    if (isset($db_pfs) && cot_module_active('pfs')) {
+                        global $db_pfs;
+                        
+                        $filesize = filesize($pfs_dir . $filename);
+                        $file_extension = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+                        
+                        $pfs_entry = array(
+                            'pfs_userid' => $usr['id'],
+                            'pfs_date' => time(),
+                            'pfs_file' => $filename,
+                            'pfs_extension' => $file_extension,
+                            'pfs_folderid' => 0,
+                            'pfs_desc' => $attachment['title'],
+                            'pfs_size' => $filesize,
+                            'pfs_count' => 0
+                        );
+                        
+                        $db->insert($db_pfs, $pfs_entry);
+                    }
+                }
             }
         }
         
@@ -929,6 +1133,7 @@ function wpi_import_attachments($xml_path, $offset = 0, $limit = 3)
     } catch (Exception $e) {
         $result['success'] = false;
         $result['error'] = 'Error importing attachments: ' . $e->getMessage();
+        wpi_log_error("Error importing attachments: " . $e->getMessage());
     }
     
     return $result;
