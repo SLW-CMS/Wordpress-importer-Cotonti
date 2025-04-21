@@ -29,6 +29,12 @@ $adminsubtitle = $L['wordpressimporter_title'];
 $id = cot_import('id', 'G', 'INT');
 $a = cot_import('a', 'G', 'ALP');
 
+// Check database access
+$db_check = wpi_check_db_access();
+if (!$db_check['success']) {
+    cot_error($L['wordpressimporter_db_error'] . ': ' . $db_check['error']);
+}
+
 // Create necessary table if not exists
 wpi_create_tables();
 
@@ -93,6 +99,8 @@ else if ($a == 'select' && $id > 0) {
         'FORM_ACTION_DELETE' => cot_url('admin', ['m' => 'other', 'p' => 'wordpressimporter', 'a' => 'delete_selected', 'id' => $id]),
         'IMPORT_ALL_URL' => cot_url('admin', ['m' => 'other', 'p' => 'wordpressimporter', 'a' => 'import_all', 'id' => $id]),
         'DELETE_ALL_URL' => cot_url('admin', ['m' => 'other', 'p' => 'wordpressimporter', 'a' => 'delete_all', 'id' => $id]),
+        'BACK_URL' => cot_url('admin', ['m' => 'other', 'p' => 'wordpressimporter']),
+        'TABLE_PREFIX' => $db_check['table_prefix'] ?? '',
     ));
     
     cot_display_messages($t);
@@ -184,7 +192,7 @@ else if ($a == 'delete_selected' && $id > 0 && $_SERVER['REQUEST_METHOD'] == 'PO
     
     cot_redirect(cot_url('admin', ['m' => 'other', 'p' => 'wordpressimporter'], '', true));
 }
-else if ($a == 'start' && $id > 0) {
+else if ($a == 'start' && $id > 0 && $_SERVER['REQUEST_METHOD'] == 'POST') {
     // Get import selection options
     $import_categories = (int)cot_import('import_categories', 'P', 'BOL');
     $import_tags = (int)cot_import('import_tags', 'P', 'BOL');
@@ -192,13 +200,17 @@ else if ($a == 'start' && $id > 0) {
     $import_pages = (int)cot_import('import_pages', 'P', 'BOL');
     $import_attachments = (int)cot_import('import_attachments', 'P', 'BOL');
     
+    // Get table prefix if set
+    $table_prefix = cot_import('table_prefix', 'P', 'TXT');
+    
     // Create a selection array to store in database
     $import_selection = [
         'categories' => $import_categories,
         'tags' => $import_tags,
         'posts' => $import_posts,
         'pages' => $import_pages,
-        'attachments' => $import_attachments
+        'attachments' => $import_attachments,
+        'table_prefix' => $table_prefix // Store table prefix
     ];
     
     // Convert to JSON for storage
@@ -210,15 +222,13 @@ else if ($a == 'start' && $id > 0) {
     cot_redirect(cot_url('admin', ['m' => 'other', 'p' => 'wordpressimporter', 'a' => 'import', 'id' => $id], '', true));
 }
 else if ($a == 'import' && $id > 0) {
-    // Import process page
+    // Import process page - this will now use PHP, not AJAX
     $import = wpi_get_import($id);
     
-    if (!$import || $import['imp_status'] != 'processing') {
+    if (!$import) {
         cot_redirect(cot_url('admin', ['m' => 'other', 'p' => 'wordpressimporter'], '', true));
     }
     
-    $t = new XTemplate(cot_tplfile('wordpressimporter.import', 'plug'));
-
     // Decode selection preferences
     $selection = json_decode($import['imp_selection'], true);
     if (!$selection) {
@@ -227,10 +237,140 @@ else if ($a == 'import' && $id > 0) {
             'tags' => 1,
             'posts' => 1,
             'pages' => 1,
-            'attachments' => 0
+            'attachments' => 0,
+            'table_prefix' => '' // Default empty prefix
         ];
     }
-
+    
+    // Set batch size
+    $batch_size = (int)$cfg['plugin']['wordpressimporter']['batch_size'];
+    if ($batch_size <= 0) {
+        $batch_size = 10;
+    }
+    
+    // Get full file path
+    $filepath = $cfg['plugin']['wordpressimporter']['upload_path'] . $import['imp_file'];
+    
+    // Process a batch of items based on current progress
+    $processed = false;
+    $message = '';
+    $error = '';
+    
+    // Set execution time limit if configured
+    if (isset($cfg['plugin']['wordpressimporter']['max_execution_time'])) {
+        $max_time = (int)$cfg['plugin']['wordpressimporter']['max_execution_time'];
+        if ($max_time > 0) {
+            @set_time_limit($max_time);
+        }
+    }
+    
+    // Set table prefix if provided
+    $original_prefix = null;
+    if (!empty($selection['table_prefix'])) {
+        // Apply table prefix override if specified
+        global $db_x;
+        $original_prefix = $db_x;
+        $db_x = $selection['table_prefix'];
+    }
+    
+    // Process the next batch of items
+    if ($selection['categories'] && $import['imp_processed_categories'] < $import['imp_categories_count']) {
+        // Process categories
+        $result = wpi_import_categories($filepath, $import['imp_processed_categories'], $batch_size);
+        
+        if ($result['success']) {
+            // Update processed count
+            $processed = array(
+                'categories' => $import['imp_processed_categories'] + $result['processed']
+            );
+            
+            wpi_update_import_status($id, 'processing', $processed);
+            $message = 'Processed ' . $result['processed'] . ' categories.';
+        } else {
+            $error = $result['error'];
+        }
+    } 
+    else if ($selection['tags'] && $import['imp_processed_tags'] < $import['imp_tags_count']) {
+        // Process tags
+        $result = wpi_import_tags($filepath, $import['imp_processed_tags'], $batch_size);
+        
+        if ($result['success']) {
+            // Update processed count
+            $processed = array(
+                'tags' => $import['imp_processed_tags'] + $result['processed']
+            );
+            
+            wpi_update_import_status($id, 'processing', $processed);
+            $message = 'Processed ' . $result['processed'] . ' tags.';
+        } else {
+            $error = $result['error'];
+        }
+    } 
+    else if ($selection['posts'] && $import['imp_processed_posts'] < $import['imp_posts_count']) {
+        // Process posts
+        $result = wpi_import_posts($filepath, $import['imp_processed_posts'], $batch_size);
+        
+        if ($result['success']) {
+            // Update processed count
+            $processed = array(
+                'posts' => $import['imp_processed_posts'] + $result['processed']
+            );
+            
+            wpi_update_import_status($id, 'processing', $processed);
+            $message = 'Processed ' . $result['processed'] . ' posts.';
+        } else {
+            $error = $result['error'];
+        }
+    } 
+    else if ($selection['pages'] && $import['imp_processed_pages'] < $import['imp_pages_count']) {
+        // Process pages
+        $result = wpi_import_pages($filepath, $import['imp_processed_pages'], $batch_size);
+        
+        if ($result['success']) {
+            // Update processed count
+            $processed = array(
+                'pages' => $import['imp_processed_pages'] + $result['processed']
+            );
+            
+            wpi_update_import_status($id, 'processing', $processed);
+            $message = 'Processed ' . $result['processed'] . ' pages.';
+        } else {
+            $error = $result['error'];
+        }
+    } 
+    else if ($selection['attachments'] && $import['imp_processed_attachments'] < $import['imp_attachments_count']) {
+        // Process attachments
+        $result = wpi_import_attachments($filepath, $import['imp_processed_attachments'], $batch_size);
+        
+        if ($result['success']) {
+            // Update processed count
+            $processed = array(
+                'attachments' => $import['imp_processed_attachments'] + $result['processed']
+            );
+            
+            wpi_update_import_status($id, 'processing', $processed);
+            $message = 'Processed ' . $result['processed'] . ' attachments.';
+        } else {
+            $error = $result['error'];
+        }
+    } 
+    else {
+        // All content types are complete
+        wpi_update_import_status($id, 'completed');
+        $message = 'Import completed successfully.';
+    }
+    
+    // Restore original table prefix if changed
+    if ($original_prefix !== null) {
+        $db_x = $original_prefix;
+    }
+    
+    // Refresh import data
+    $import = wpi_get_import($id);
+    
+    // Create template for import progress display
+    $t = new XTemplate(cot_tplfile('wordpressimporter.import', 'plug'));
+    
     // Calculate percentages
     $categories_percent = $import['imp_categories_count'] > 0 && $selection['categories'] ? 
         round(($import['imp_processed_categories'] / $import['imp_categories_count']) * 100) : 100;
@@ -260,6 +400,7 @@ else if ($a == 'import' && $id > 0) {
     
     $overall_percent = $total_items > 0 ? round(($processed_items / $total_items) * 100) : 100;
     
+    // Assign data to template
     $t->assign(array(
         'IMPORT_ID' => $import['imp_id'],
         'IMPORT_TITLE' => $import['imp_title'],
@@ -280,18 +421,51 @@ else if ($a == 'import' && $id > 0) {
         'IMPORT_PAGES_PERCENT' => $pages_percent,
         'IMPORT_ATTACHMENTS_PERCENT' => $attachments_percent,
         'IMPORT_OVERALL_PERCENT' => $overall_percent,
-        'IMPORT_AJAX_URL' => cot_url('plug', ['e' => 'wordpressimporter', 'a' => 'ajax_import', 'id' => $import['imp_id']]),
         'IMPORT_SELECTION_CATEGORIES' => $selection['categories'],
         'IMPORT_SELECTION_TAGS' => $selection['tags'],
         'IMPORT_SELECTION_POSTS' => $selection['posts'],
         'IMPORT_SELECTION_PAGES' => $selection['pages'],
         'IMPORT_SELECTION_ATTACHMENTS' => $selection['attachments'],
+        'IMPORT_STATUS' => $import['imp_status'],
+        'IMPORT_STATUS_MESSAGE' => !empty($message) ? $message : (!empty($error) ? $error : ''),
+        'CONTINUE_URL' => cot_url('admin', ['m' => 'other', 'p' => 'wordpressimporter', 'a' => 'import', 'id' => $id]),
+        'BACK_URL' => cot_url('admin', ['m' => 'other', 'p' => 'wordpressimporter'])
     ));
+    
+    // Display processing or complete message
+    if ($import['imp_status'] == 'completed') {
+        cot_message('wordpressimporter_import_complete');
+    } elseif (!empty($error)) {
+        cot_error($error);
+    } elseif (!empty($message)) {
+        cot_message($message);
+    }
     
     cot_display_messages($t);
     
     $t->parse('MAIN');
     $pluginBody = $t->text('MAIN');
+    
+    // Auto-refresh page if still processing
+    if ($import['imp_status'] == 'processing') {
+        // Add meta refresh to continue processing
+        $delay = 2; // 2 seconds delay
+        $refreshUrl = cot_url('admin', ['m' => 'other', 'p' => 'wordpressimporter', 'a' => 'import', 'id' => $id]);
+        
+        // Alternatif yöntem: cot_add_rc fonksiyonu mevcutsa kullan, değilse doğrudan template'e ekle
+        if (function_exists('cot_add_rc')) {
+            cot_add_rc('<meta http-equiv="refresh" content="' . $delay . ';url=' . $refreshUrl . '">');
+        } else {
+            // Doğrudan pluginBody'e ekle 
+            global $R; // Cotonti'nin resource konteynerini kullan
+            if (isset($R['temporaryhead'])) {
+                $R['temporaryhead'] .= '<meta http-equiv="refresh" content="' . $delay . ';url=' . $refreshUrl . '">';
+            } else {
+                // Son çare - doğrudan template'in başına ekle
+                $t->assign('REFRESH_META', '<meta http-equiv="refresh" content="' . $delay . ';url=' . $refreshUrl . '">');
+            }
+        }
+    }
 }
 else {
     // Main admin page - list imports
@@ -340,7 +514,8 @@ else {
     
     $t->assign(array(
         'UPLOAD_FORM_ACTION' => cot_url('admin', ['m' => 'other', 'p' => 'wordpressimporter', 'a' => 'upload']),
-        'UPLOAD_FORM_MAX_SIZE' => floor($max_size / 1024) . ' KB'
+        'UPLOAD_FORM_MAX_SIZE' => floor($max_size / 1024) . ' KB',
+        'DB_TABLE_PREFIX' => $db_check['table_prefix'] ?? $db_x
     ));
     
     cot_display_messages($t);
