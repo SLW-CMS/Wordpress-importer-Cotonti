@@ -12,6 +12,13 @@
     <form action="{FORM_ACTION}" method="post">
         <table class="cells">
             <tr>
+                <td class="width30">{PHP.L.wordpressimporter_database_prefix}:</td>
+                <td class="width70">
+                    <input type="text" class="text" name="table_prefix" value="{TABLE_PREFIX}" />
+                    <p class="small">{PHP.L.wordpressimporter_database_prefix_hint}</p>
+                </td>
+            </tr>
+            <tr>
                 <td class="width30">{PHP.L.wordpressimporter_categories} ({IMPORT_CATEGORIES_COUNT}):</td>
                 <td class="width70">
                     <label>
@@ -61,20 +68,32 @@
                 <td></td>
                 <td>
                     <input type="submit" class="button" value="{PHP.L.wordpressimporter_start_import}">
-                    <a href="{PHP|cot_url('admin', 'm=other&p=wordpressimporter')}" class="button">{PHP.L.Cancel}</a>
+                    <a href="{BACK_URL}" class="button">{PHP.L.Cancel}</a>
                 </td>
             </tr>
-          <tr>
-            <td></td>
-            <td>
-                <input type="submit" name="import_selected" class="button" value="{PHP.L.wordpressimporter_import_selected}">
-                <input type="submit" name="delete_selected" class="button" formaction="{FORM_ACTION_DELETE}" value="{PHP.L.wordpressimporter_delete_selected}" onclick="return confirm('{PHP.L.wordpressimporter_confirm_delete}')">
-                <a href="{IMPORT_ALL_URL}" class="button">{PHP.L.wordpressimporter_import_all}</a>
-                <a href="{DELETE_ALL_URL}" class="button" onclick="return confirm('{PHP.L.wordpressimporter_confirm_delete}')">{PHP.L.wordpressimporter_delete_all}</a>
-                <a href="{PHP|cot_url('admin', 'm=other&p=wordpressimporter')}" class="button">{PHP.L.Cancel}</a>
-            </td>
-        </tr>
+            <tr>
+                <td></td>
+                <td>
+                    <div class="actions-info">
+                        <p><strong>{PHP.L.wordpressimporter_more_options}:</strong></p>
+                        <p>
+                            <a href="{IMPORT_ALL_URL}" class="button">{PHP.L.wordpressimporter_import_all}</a>
+                            <a href="{DELETE_ALL_URL}" class="button" onclick="return confirm('{PHP.L.wordpressimporter_confirm_delete}')">{PHP.L.wordpressimporter_delete_all}</a>
+                        </p>
+                    </div>
+                </td>
+            </tr>
         </table>
     </form>
 </div>
+
+<style type="text/css">
+.actions-info {
+    margin-top: 15px;
+    padding: 10px;
+    background-color: #f9f9f9;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+}
+</style>
 <!-- END: MAIN -->
